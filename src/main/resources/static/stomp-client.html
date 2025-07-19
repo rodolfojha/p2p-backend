@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Chat Transacción</title>
+    <!-- SockJS sigue siendo útil para compatibilidad con navegadores antiguos -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.6.1/sockjs.min.js"></script>
+    <!-- Usar stomp.js 2.3.3 que expone Stomp globalmente -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script> 
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        #chat-container { border: 1px solid #ccc; height: 300px; overflow-y: scroll; padding: 10px; margin: 10px 0; }
+        #message-input { width: 70%; padding: 5px; }
+        #send-button { padding: 5px 15px; }
+        .message { margin: 5px 0; padding: 5px; border-radius: 5px; }
+        .vendedor { background-color: #e3f2fd; }
+        .cajero { background-color: #f3e5f5; }
+        .sistema { background-color: #fff3e0; font-style: italic; }
+        .debug { background-color: #e8f5e8; }
+        .connection-info { background-color: #f5f5f5; padding: 10px; margin: 10px 0; border-radius: 5px; }
+        .test-section { background-color: #fff3cd; padding: 10px; margin: 10px 0; border-radius: 5px; border: 1px solid #ffeaa7; }
+    </style>
+</head>
+<body>
+    <h1>Test Chat Transacción P2P</h1>
+    
+    <div class="connection-info">
+        <h3>Configuración de Conexión:</h3>
+        <div>
+            <label>Token JWT: </label>
+            <input type="text" id="tokenInput" placeholder="Pegar token aquí (opcional para testing)" style="width: 400px;">
+        </div>
+        <div style="margin-top: 10px;">
+            <label>ID Transacción: </label>
+            <input type="number" id="transaccionId" value="1" min="1">
+        </div>
+        <div style="margin-top: 10px;">
+            <label>Tu Rol (para display): </label>
+            <select id="rolSelect">
+                <option value="vendedor">Vendedor</option>
+                <option value="cajero">Cajero</option>
+            </select>
+        </div>
+        <div style="margin-top: 10px;">
+            <input type="checkbox" id="useAuthCheckbox"> 
+            <label for="useAuthCheckbox">Usar autenticación JWT (desmarcar para test sin token)</label>
+        </div>
+        <div style="margin-top: 10px;">
+            <button id="connectButton" onclick="connect()">🔌 Conectar</button>
+            <button id="disconnectButton" onclick="disconnect()" disabled>❌ Desconectar</button>
+            <span id="status">Desconectado</span>
+        </div>
+    </div>
+
+    <div class="test-section">
+        <h3>🧪 Test Básico (Sin Chat):</h3>
+        <button onclick="sendTestMessage()">Enviar Mensaje de Test Simple</button>
+        <small>Esto enviará un mensaje a /app/test para probar la conectividad básica</small>
+    </div>
+
+    <div>
+        <h3>Chat Transacción #<span id="currentTransactionId">1</span></h3>
+        <div id="chat-container"></div>
+        <div>
+            <input type="text" id="message-input" placeholder="Escribe tu mensaje...">
+            <button id="send-button" onclick="sendMessage()" disabled>Enviar</button>
+        </div>
+    </div>
+
+    <div>
+        <h3>Logs de Conexión:</h3>
+        <div id="logs" style="border: 1px solid #ccc; height: 150px; overflow-y: scroll; padding: 10px; font-size: 12px;"></div>
+    </div>
+
+    <script>
+        let stompClient = null;
+        let currentTransactionId = 1;
+        
+        function log(message) {
+            const logs = document.getElementById('logs');
+            const timestamp = new Date().toLocaleTimeString();
+            logs.innerHTML += `[${timestamp}] ${message}<br>`;
+            logs.scrollTop = logs.scrollHeight;
+            console.log(message);
+        }
+
+        function displayMessage(message) {
+            const chatContainer = document.getElementById('chat-container');
+            const messageDiv = document.createElement('div');
+            
+            let usuarioNombre, usuarioRol, contenido, timestamp;
+            
+            if (typeof message === 'string') {
+                try {
+                    message = JSON.parse(message);
+                } catch (e) {
+                    log('Error al parsear mensaje JSON: ' + e.message);
+                    messageDiv.className = 'message sistema';
+                    messageDiv.innerHTML = `<strong>Error de formato:</strong> ${message}`;
+                    chatContainer.appendChild(messageDiv);
+                    chatContainer.scrollTop = chatContainer.scrollHeight;
+                    return;
+                }
+            }
+
+            if (message.remitente) {
+                usuarioNombre = message.remitente.nombreCompleto || message.remitente.email;
+                usuarioRol = message.remitente.rol;
+                contenido = message.contenido;
+                timestamp = message.fechaEnvio ? new Date(message.fechaEnvio).toLocaleTimeString() : new Date().toLocaleTimeString();
+            } else if (message.usuario) {
+                usuarioNombre = message.usuario;
+                usuarioRol = message.rol;
+                contenido = message.contenido; 
+                timestamp = message.timestamp;
+            } else if (message.error) {
+                usuarioNombre = 'Sistema (Error)';
+                usuarioRol = 'sistema';
+                contenido = message.mensaje;
+                timestamp = new Date().toLocaleTimeString();
+            } else {
+                usuarioNombre = 'Debug User';
+                usuarioRol = 'debug';
+                contenido = message.contenido || JSON.stringify(message);
+                timestamp = message.timestamp || new Date().toLocaleTimeString();
+            }
+            
+            messageDiv.className = `message ${usuarioRol ? usuarioRol.toLowerCase() : 'usuario'}`;
+            messageDiv.innerHTML = `
+                <strong>${usuarioNombre} (${usuarioRol})</strong> 
+                <span style="color: #666; font-size: 0.8em;">[${timestamp}]</span><br>
+                ${contenido}
+            `;
+            chatContainer.appendChild(messageDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        function connect() {
+            const useAuth = document.getElementById('useAuthCheckbox').checked;
+            const token = document.getElementById('tokenInput').value.trim();
+            
+            if (useAuth && (!token || token === '')) {
+                log('❌ Error: Token JWT requerido cuando la autenticación está habilitada.');
+                return;
+            }
+
+            currentTransactionId = document.getElementById('transaccionId').value;
+            document.getElementById('currentTransactionId').textContent = currentTransactionId;
+            
+            const socket = new SockJS('http://localhost:8080/ws');
+            stompClient = Stomp.over(socket); 
+
+            stompClient.debug = function(str) { 
+                log('STOMP Debug: ' + str);
+            };
+            
+            // Headers de conexión
+            let headers = {};
+            if (useAuth && token) {
+                headers['Authorization'] = `Bearer ${token}`;
+                log('🔐 Conectando con autenticación JWT...');
+            } else {
+                log('🔓 Conectando sin autenticación...');
+            }
+
+            stompClient.connect(headers, function (frame) {
+                document.getElementById('status').textContent = '✅ Conectado';
+                log('✅ Conectado exitosamente!');
+                log('Frame headers: ' + JSON.stringify(frame.headers));
+                
+                document.getElementById('connectButton').disabled = true;
+                document.getElementById('disconnectButton').disabled = false;
+                document.getElementById('send-button').disabled = false;
+
+                // Suscribirse al chat de la transacción
+                const chatTopic = `/topic/chat/${currentTransactionId}`;
+                stompClient.subscribe(chatTopic, function(message) {
+                    log(`📨 Mensaje recibido en ${chatTopic}: ${message.body}`);
+                    displayMessage(message.body); 
+                });
+                
+                // Suscribirse también al topic de test
+                stompClient.subscribe('/topic/test', function(message) {
+                    log(`🧪 Test message recibido: ${message.body}`);
+                    displayMessage(message.body);
+                });
+                
+                log(`✅ Suscrito a ${chatTopic} y /topic/test`);
+            }, function (error) {
+                document.getElementById('status').textContent = '❌ Error STOMP';
+                log('❌ Error de conexión: ' + error);
+                console.error('Error completo:', error);
+                document.getElementById('connectButton').disabled = false; 
+                document.getElementById('disconnectButton').disabled = true;
+                document.getElementById('send-button').disabled = true;
+            });
+        }
+
+        function disconnect() {
+            if (stompClient !== null) {
+                stompClient.disconnect(function() {
+                    document.getElementById('status').textContent = '🔌 Desconectado';
+                    log('🔌 Desconectado del servidor');
+                    document.getElementById('connectButton').disabled = false;
+                    document.getElementById('disconnectButton').disabled = true;
+                    document.getElementById('send-button').disabled = true;
+                }); 
+            }
+        }
+
+        function sendTestMessage() {
+            if (stompClient && stompClient.connected) {
+                const testMessage = "Test message - " + new Date().toLocaleTimeString();
+                stompClient.send('/app/test', {}, testMessage);
+                log(`🧪 Enviado test message: ${testMessage}`);
+            } else {
+                log('❌ No conectado - no se puede enviar test message');
+            }
+        }
+
+        function sendMessage() {
+            const messageInput = document.getElementById('message-input');
+            const message = messageInput.value.trim();
+
+            if (message && stompClient && stompClient.connected) {
+                const chatTopic = `/app/chat/${currentTransactionId}`; 
+                
+                // ENVIAR COMO JSON en lugar de string simple
+                const messageData = {
+                    contenido: message
+                };
+                
+                stompClient.send(chatTopic, {}, JSON.stringify(messageData)); 
+                log(`📤 Enviado a ${chatTopic}: ${message}`);
+                messageInput.value = '';
+            } else if (!stompClient || !stompClient.connected) {
+                log('❌ No conectado - no se puede enviar mensaje');
+            }
+        }
+
+        document.getElementById('message-input').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+
+        window.onload = function() {
+            log('🌐 Página cargada - configurar conexión y hacer click en Conectar');
+            if (typeof Stomp !== 'undefined') { 
+                document.getElementById('connectButton').disabled = false;
+                document.getElementById('status').textContent = 'Listo para conectar';
+            } else {
+                log('⚠️ Librería STOMP aún no disponible. Recarga la página si el problema persiste.');
+                document.getElementById('status').textContent = 'Error de carga STOMP';
+            }
+        };
+    </script>
+</body>
+</html>
