@@ -18,19 +18,19 @@ import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import java.util.Arrays;
 
-import org.springframework.security.authorization.AuthorizationManager;
-import org.springframework.messaging.Message;
-import org.springframework.security.config.annotation.web.socket.EnableWebSocketSecurity;
-import org.springframework.security.messaging.access.intercept.MessageMatcherDelegatingAuthorizationManager;
 import org.springframework.security.authentication.AuthenticationProvider;
 import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
 import org.springframework.security.config.http.SessionCreationPolicy;
-import org.springframework.messaging.simp.stomp.StompCommand; // Keep this import if needed elsewhere, but not for simpType(StompCommand.CONNECT)
 
+// IMPORTACIONES PARA WEBSOCKET SECURITY
+import org.springframework.security.config.annotation.web.socket.EnableWebSocketSecurity;
+import org.springframework.security.authorization.AuthorizationManager;
+import org.springframework.messaging.Message;
+import org.springframework.security.messaging.access.intercept.MessageMatcherDelegatingAuthorizationManager;
 
 @Configuration
 @EnableMethodSecurity // Habilitar seguridad a nivel de método (@PreAuthorize)
-@EnableWebSocketSecurity // Habilitar seguridad a nivel de WebSocket (STOMP)
+// @EnableWebSocketSecurity // COMENTAR TEMPORALMENTE
 public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthFilter;
@@ -81,7 +81,7 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 // Rutas públicas: WebSocket handshake, recursos estáticos, registro/login
                 .requestMatchers(
-                    "/ws/**", // WebSocket endpoint (handshake HTTP)
+                    "/ws/**", "/app/**", "/topic/**", "/user/**", // WebSocket endpoints
                     "/", "/stomp-client.html", "/js/**", "/css/**", "/images/**", "/favicon.ico", // Recursos estáticos
                     "/api/auth/register", "/api/auth/login" // Endpoints de autenticación
                 ).permitAll() // Permitir acceso público a estas rutas
@@ -96,24 +96,13 @@ public class SecurityConfig {
         return http.build();
     }
 
-    // Re-habilitar la configuración de seguridad a nivel de mensaje STOMP
+    // COMENTAR TEMPORALMENTE el bean de autorización
+    /*
     @Bean
     public AuthorizationManager<Message<?>> messageAuthorizationManager() {
         MessageMatcherDelegatingAuthorizationManager.Builder messages = MessageMatcherDelegatingAuthorizationManager.builder();
-        
-        // ELIMINAMOS ESTA LÍNEA: messages.simpType(StompCommand.CONNECT).permitAll(); 
-        // El comando CONNECT es manejado por el interceptor y el resto de reglas.
-
-        // Permite que los usuarios autenticados envíen mensajes a /app/chat/{transaccionId}
-        messages
-            .simpDestMatchers("/app/chat/**").authenticated() // Solo usuarios autenticados pueden ENVIAR a /app/chat
-            // Permite que los usuarios autenticados se suscriban a /topic/chat/{transaccionId}
-            .simpSubscribeDestMatchers("/topic/chat/**").authenticated() // Solo usuarios autenticados pueden SUSCRIBIRSE al chat
-            // Permite que cualquier usuario se suscriba a los tópicos públicos (ej. solicitudes pendientes para cajeros)
-            .simpSubscribeDestMatchers("/topic/solicitudes-pendientes").permitAll()
-            .simpSubscribeDestMatchers("/topic/solicitudes-actualizadas").permitAll()
-            // Denegar cualquier otro mensaje STOMP por defecto si no coincide con las reglas anteriores
-            .anyMessage().denyAll();
+        messages.anyMessage().permitAll();
         return messages.build();
     }
+    */
 }

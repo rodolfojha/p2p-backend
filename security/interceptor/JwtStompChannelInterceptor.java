@@ -1,4 +1,4 @@
-package com.multipagos.p2p_backend.backend.security.interceptor; // Ajusta si tu paquete es diferente
+package com.multipagos.p2p_backend.backend.security.interceptor;
 
 import com.multipagos.p2p_backend.backend.security.JwtProvider;
 import org.springframework.messaging.Message;
@@ -29,63 +29,96 @@ public class JwtStompChannelInterceptor implements ChannelInterceptor {
 
     @Override
     public Message<?> preSend(Message<?> message, MessageChannel channel) {
-        StompHeaderAccessor accessor = MessageHeaderAccessor.getAccessor(message, StompHeaderAccessor.class);
+        try {
+            StompHeaderAccessor accessor = MessageHeaderAccessor.getAccessor(message, StompHeaderAccessor.class);
 
-        // System.out.println("--- STOMP Interceptor: Comando " + accessor.getCommand() + " ---"); // Log general
-
-        // Intercepta el comando CONNECT (cuando el cliente se conecta por primera vez)
-        if (StompCommand.CONNECT.equals(accessor.getCommand())) {
-            // System.out.println("STOMP Interceptor: Procesando CONNECT command."); // Log
-            List<String> authorizationHeaders = accessor.getNativeHeader("Authorization");
-            String jwt = null;
-
-            if (authorizationHeaders != null && !authorizationHeaders.isEmpty()) {
-                String authHeader = authorizationHeaders.get(0);
-                if (authHeader != null && authHeader.startsWith("Bearer ")) {
-                    jwt = authHeader.substring(7);
-                    // System.out.println("STOMP Interceptor: JWT extraído: " + jwt.substring(0, Math.min(20, jwt.length())) + "..."); // Log (solo inicio del token)
-                } else {
-                    System.out.println("STOMP Interceptor: Encabezado Authorization no Bearer o vacío."); // Log
-                }
-            } else {
-                System.out.println("STOMP Interceptor: Encabezado Authorization ausente."); // Log
+            if (accessor == null) {
+                System.out.println("STOMP Interceptor: accessor nulo - permitiendo");
+                return message;
             }
 
-            if (jwt != null) {
-                if (jwtProvider.validateToken(jwt)) {
-                    String userEmail = jwtProvider.extractUsername(jwt);
-                    // System.out.println("STOMP Interceptor: Token válido para email: " + userEmail); // Log
-                    UserDetails userDetails = userDetailsService.loadUserByUsername(userEmail);
+            StompCommand command = accessor.getCommand();
+            System.out.println("STOMP Interceptor: Procesando comando " + command);
 
-                    if (userDetails != null) {
-                        Authentication authentication = new UsernamePasswordAuthenticationToken(
-                                userDetails, null, userDetails.getAuthorities());
-                        // ¡CRUCIAL! Establece la autenticación en el contexto de seguridad para esta sesión STOMP
-                        accessor.setUser(authentication); // Asocia la autenticación con la sesión STOMP
-                        System.out.println("STOMP Interceptor: Usuario " + userEmail + " autenticado para WebSocket."); // Log
-                    } else {
-                        System.err.println("STOMP Interceptor: UserDetails nulo para email: " + userEmail); // Log de error
-                    }
-                } else {
-                    System.err.println("STOMP Interceptor: Token JWT inválido."); // Log de error
-                }
-            } else {
-                System.err.println("STOMP Interceptor: JWT es nulo. Conexión no autenticada."); // Log de error
+            if (StompCommand.CONNECT.equals(command)) {
+                return handleConnectSafely(accessor, message);
+            } else if (StompCommand.SEND.equals(command) || StompCommand.SUBSCRIBE.equals(command)) {
+                return handleOtherCommandsSafely(accessor, message);
             }
-        } else if (StompCommand.SEND.equals(accessor.getCommand()) || StompCommand.SUBSCRIBE.equals(accessor.getCommand())) {
-            // System.out.println("STOMP Interceptor: Procesando comando " + accessor.getCommand() + "."); // Log
+            
+            // SIEMPRE permitir el mensaje
+            return message;
+            
+        } catch (Exception e) {
+            System.err.println("STOMP Interceptor: ERROR CRÍTICO: " + e.getMessage());
+            e.printStackTrace();
+            // EN CASO DE ERROR CRÍTICO, SIEMPRE PERMITIR EL MENSAJE
+            return message;
+        }
+    }
+
+    private Message<?> handleConnectSafely(StompHeaderAccessor accessor, Message<?> message) {
+        try {
+            System.out.println("STOMP Interceptor: === CONNECT SEGURO ===");
+            
+            List<String> authHeaders = accessor.getNativeHeader("Authorization");
+            
+            if (authHeaders == null || authHeaders.isEmpty()) {
+                System.out.println("STOMP Interceptor: Sin token - conexión permitida sin auth");
+                return message;
+            }
+
+            String authHeader = authHeaders.get(0);
+            if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+                System.out.println("STOMP Interceptor: Header incorrecto - conexión permitida sin auth");
+                return message;
+            }
+
+            String jwt = authHeader.substring(7);
+            System.out.println("STOMP Interceptor: Validando token...");
+
+            boolean isValid = jwtProvider.validateToken(jwt);
+            System.out.println("STOMP Interceptor: Token válido: " + isValid);
+
+            if (!isValid) {
+                System.err.println("STOMP Interceptor: Token inválido - pero permitiendo conexión");
+                return message;
+            }
+
+            String userEmail = jwtProvider.extractUsername(jwt);
+            System.out.println("STOMP Interceptor: Email extraído: " + userEmail);
+
+            UserDetails userDetails = userDetailsService.loadUserByUsername(userEmail);
+            Authentication authentication = new UsernamePasswordAuthenticationToken(
+                    userDetails, null, userDetails.getAuthorities());
+            
+            accessor.setUser(authentication);
+            System.out.println("STOMP Interceptor: ✅ Autenticación configurada para " + userEmail);
+            
+            return message;
+
+        } catch (Exception e) {
+            System.err.println("STOMP Interceptor: Error en CONNECT: " + e.getMessage());
+            e.printStackTrace();
+            System.err.println("STOMP Interceptor: Permitiendo conexión a pesar del error");
+            return message;
+        }
+    }
+
+    private Message<?> handleOtherCommandsSafely(StompHeaderAccessor accessor, Message<?> message) {
+        try {
             Authentication authentication = (Authentication) accessor.getUser();
             if (authentication != null && authentication.isAuthenticated()) {
-                // Establece la autenticación en el SecurityContextHolder para que los controladores @MessageMapping puedan acceder a ella.
                 SecurityContextHolder.getContext().setAuthentication(authentication);
-                // System.out.println("STOMP Interceptor: Mensaje/Suscripción de usuario autenticado: " + authentication.getName()); // Log
+                System.out.println("STOMP Interceptor: Auth configurado para " + accessor.getCommand() + ": " + authentication.getName());
             } else {
-                System.err.println("STOMP Interceptor: Mensaje/Suscripción de usuario NO autenticado en la sesión STOMP. Denegando."); // Log de error
-                // Si no está autenticado, denegar el mensaje/suscripción
-                // Esto se maneja por AuthorizationChannelInterceptor y messageAuthorizationManager
-                // throw new MessageDeliveryException("Unauthorized STOMP message/subscription");
+                System.out.println("STOMP Interceptor: Sin auth para " + accessor.getCommand());
             }
+            return message;
+        } catch (Exception e) {
+            System.err.println("STOMP Interceptor: Error en " + accessor.getCommand() + ": " + e.getMessage());
+            e.printStackTrace();
+            return message;
         }
-        return message;
     }
 }

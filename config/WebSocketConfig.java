@@ -5,24 +5,23 @@ import org.springframework.messaging.simp.config.MessageBrokerRegistry;
 import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBroker;
 import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
 import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerConfigurer;
-// Re-habilitar la importación y la inyección del interceptor
 import org.springframework.messaging.simp.config.ChannelRegistration;
-import com.multipagos.p2p_backend.backend.security.interceptor.JwtStompChannelInterceptor;
+import com.multipagos.p2p_backend.backend.security.interceptor.HeaderCaptureInterceptor;
 
 @Configuration
-@EnableWebSocketMessageBroker // Habilita el manejo de mensajes WebSocket a través de un broker de mensajes STOMP
+@EnableWebSocketMessageBroker
 public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
-    // Re-habilitar la inyección del interceptor
-    private final JwtStompChannelInterceptor jwtStompChannelInterceptor;
+    private final HeaderCaptureInterceptor headerCaptureInterceptor;
 
-    // Re-habilitar el constructor con el interceptor
-    public WebSocketConfig(JwtStompChannelInterceptor jwtStompChannelInterceptor) {
-        this.jwtStompChannelInterceptor = jwtStompChannelInterceptor;
+    public WebSocketConfig(HeaderCaptureInterceptor headerCaptureInterceptor) {
+        this.headerCaptureInterceptor = headerCaptureInterceptor;
+        System.out.println("=== WebSocketConfig con interceptor simple ===");
     }
 
     @Override
     public void configureMessageBroker(MessageBrokerRegistry config) {
+        System.out.println("=== Configurando Message Broker ===");
         config.enableSimpleBroker("/topic", "/user");
         config.setApplicationDestinationPrefixes("/app");
         config.setUserDestinationPrefix("/user");
@@ -30,14 +29,15 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
     @Override
     public void registerStompEndpoints(StompEndpointRegistry registry) {
+        System.out.println("=== Registrando STOMP endpoints ===");
         registry.addEndpoint("/ws")
-                .setAllowedOriginPatterns("*") // Permitir cualquier origen para desarrollo
+                .setAllowedOriginPatterns("*")
                 .withSockJS();
     }
 
-    // Re-habilitar el método de configuración del interceptor
     @Override
     public void configureClientInboundChannel(ChannelRegistration registration) {
-        registration.interceptors(jwtStompChannelInterceptor);
+        System.out.println("=== Configurando interceptor simple ===");
+        registration.interceptors(headerCaptureInterceptor);
     }
 }

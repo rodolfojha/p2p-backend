@@ -51,6 +51,7 @@ public class JwtProvider {
             .parseSignedClaims(token) // <-- NUEVO: usa parseSignedClaims
             .getPayload(); // <-- NUEVO: usa getPayload en lugar de getBody
     }
+    
     // Extrae el email del token (el 'subject')
     public String extractUsername(String token) {
         return extractClaim(token, Claims::getSubject);
@@ -78,10 +79,37 @@ public class JwtProvider {
         }
     }
 
-
     // Obtiene la clave de firma a partir del secreto base64
     private SecretKey getSignKey() { // <-- CAMBIAR Key a SecretKey
         byte[] keyBytes = Decoders.BASE64.decode(secret);
         return Keys.hmacShaKeyFor(keyBytes);
+    }
+
+    // --- MÉTODO DE DEBUG AGREGADO ---
+    public void debugToken(String token) {
+        try {
+            System.out.println("=== JWT DEBUG ===");
+            System.out.println("Token recibido: " + (token != null ? token.substring(0, Math.min(50, token.length())) + "..." : "null"));
+            
+            if (token != null) {
+                String username = extractUsername(token);
+                Date expiration = extractExpiration(token);
+                boolean isValid = validateToken(token);
+                
+                System.out.println("Username extraído: " + username);
+                System.out.println("Expiración: " + expiration);
+                System.out.println("Es válido: " + isValid);
+                System.out.println("Fecha actual: " + new Date());
+                
+                // Extraer rol si existe
+                Claims claims = extractAllClaims(token);
+                Object role = claims.get("role");
+                System.out.println("Rol extraído: " + role);
+            }
+            System.out.println("=== FIN JWT DEBUG ===");
+        } catch (Exception e) {
+            System.err.println("Error en debug JWT: " + e.getMessage());
+            e.printStackTrace();
+        }
     }
 }
