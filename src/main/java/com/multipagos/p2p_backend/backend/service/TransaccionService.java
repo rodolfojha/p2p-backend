@@ -45,15 +45,15 @@ public class TransaccionService {
     }
 
     @Transactional
-    public Transaccion crearSolicitudTransaccion(Long vendedorId, SolicitudTransaccionRequest request) {
+    public Transaccion solicitarTransaccion(SolicitudTransaccionRequest request, String emailVendedor) { // Cambiado a recibir email
         // 1. Verificar que el vendedor exista
-        Usuario vendedor = usuarioRepository.findById(vendedorId)
-            .orElseThrow(() -> new IllegalArgumentException("Vendedor no encontrado con ID: " + vendedorId));
+        Usuario vendedor = usuarioRepository.findByEmail(emailVendedor)
+                .orElseThrow(() -> new IllegalArgumentException("Vendedor no encontrado con email: " + emailVendedor));
 
         // 2. Verificar que el método de pago del vendedor exista y le pertenezca
         MetodoPagoUsuario metodoPagoVendedor = metodoPagoUsuarioRepository.findByIdAndUsuarioId(
-            request.getMetodoPagoVendedorId(), vendedorId)
-            .orElseThrow(() -> new IllegalArgumentException("Método de pago del vendedor no encontrado o no le pertenece."));
+                request.getMetodoPagoVendedorId(), vendedor.getId()) // Usar vendedor.getId()
+                .orElseThrow(() -> new IllegalArgumentException("Método de pago del vendedor no encontrado o no le pertenece."));
 
         // 3. Validar el tipo de operación
         if (!request.getTipoOperacion().equalsIgnoreCase("deposito") &&
@@ -69,9 +69,6 @@ public class TransaccionService {
 
         // 5. Calcular comisiones (ejemplo de lógica, puedes ajustar los porcentajes)
         BigDecimal comisionPlataformaPorcentaje = new BigDecimal("0.01"); // 1%
-        // BigDecimal comisionVendedorPorcentaje = new BigDecimal("0.005"); // 0.5% - No usado directamente aquí
-        // BigDecimal comisionCajeroPorcentaje = new BigDecimal("0.005"); // 0.5% - No usado directamente aquí
-
         BigDecimal montoBase = request.getMonto();
         BigDecimal comisionBruta = montoBase.multiply(comisionPlataformaPorcentaje).setScale(2, RoundingMode.HALF_UP);
 
@@ -92,6 +89,7 @@ public class TransaccionService {
         transaccion.setMontoNetoVendedor(montoNetoVendedor);
         transaccion.setEstado("pendiente"); // Estado inicial
         transaccion.setMetodoPagoVendedor(metodoPagoVendedor);
+        transaccion.setFechaSolicitud(LocalDateTime.now()); // Establecer fecha de solicitud
 
         // 7. Guardar la transacción
         Transaccion savedTransaccion = transaccionRepository.save(transaccion);
@@ -105,12 +103,12 @@ public class TransaccionService {
     // --- Métodos para que el cajero vea y acepte solicitudes ---
 
     @Transactional(readOnly = true)
-    public List<Transaccion> obtenerSolicitudesPendientesParaCajero() {
+    public List<Transaccion> getTransaccionesPendientes() { // Renombrado para consistencia
         return transaccionRepository.findByEstado("pendiente");
     }
 
     @Transactional
-    public Transaccion aceptarSolicitud(Long transaccionId, Long cajeroId) {
+    public Transaccion aceptarTransaccion(Long transaccionId, String emailCajero) { // Cambiado a recibir email
         // 1. Verificar que la transacción exista y esté en estado 'pendiente'
         Transaccion transaccion = transaccionRepository.findById(transaccionId)
             .orElseThrow(() -> new IllegalArgumentException("Transacción no encontrada con ID: " + transaccionId));
@@ -120,11 +118,11 @@ public class TransaccionService {
         }
 
         // 2. Verificar que el cajero exista y tenga el rol de 'cajero'
-        Usuario cajero = usuarioRepository.findById(cajeroId)
-            .orElseThrow(() -> new IllegalArgumentException("Cajero no encontrado con ID: " + cajeroId));
+        Usuario cajero = usuarioRepository.findByEmail(emailCajero) // Buscar por email
+            .orElseThrow(() -> new IllegalArgumentException("Cajero no encontrado con email: " + emailCajero));
 
         if (!cajero.getRol().equalsIgnoreCase("cajero")) {
-            throw new IllegalArgumentException("El usuario con ID " + cajeroId + " no es un cajero.");
+            throw new IllegalArgumentException("El usuario con email " + emailCajero + " no es un cajero.");
         }
         if (!cajero.getDisponibilidadCajero()) {
             throw new IllegalArgumentException("El cajero no está disponible para aceptar solicitudes.");
@@ -155,7 +153,7 @@ public class TransaccionService {
     // --- NUEVOS MÉTODOS PARA ACTUALIZAR EL ESTADO DE LA TRANSACCIÓN ---
 
     @Transactional
-    public Transaccion marcarPagoIniciado(Long transaccionId, Long pagadorId, String urlComprobante) {
+    public Transaccion marcarPagoIniciado(Long transaccionId, String emailPagador, String urlComprobante) { // Cambiado a recibir email
         Transaccion transaccion = transaccionRepository.findById(transaccionId)
             .orElseThrow(() -> new IllegalArgumentException("Transacción no encontrada con ID: " + transaccionId));
 
@@ -164,14 +162,17 @@ public class TransaccionService {
             throw new IllegalArgumentException("La transacción no está en estado 'aceptada' para iniciar el pago.");
         }
 
+        // Obtener el usuario pagador
+        Usuario pagador = usuarioRepository.findByEmail(emailPagador)
+            .orElseThrow(() -> new IllegalArgumentException("Usuario pagador no encontrado con email: " + emailPagador));
+
         // Validar que el pagador sea el vendedor (para depósito) o el cajero (para retiro)
-        // Lógica: Si es depósito, el vendedor paga. Si es retiro, el cajero paga.
         if (transaccion.getTipoOperacion().equalsIgnoreCase("deposito")) {
-            if (!transaccion.getVendedor().getId().equals(pagadorId)) {
+            if (!transaccion.getVendedor().getId().equals(pagador.getId())) {
                 throw new IllegalArgumentException("Solo el vendedor puede marcar el pago iniciado para un depósito.");
             }
         } else { // Retiro
-            if (transaccion.getCajero() == null || !transaccion.getCajero().getId().equals(pagadorId)) {
+            if (transaccion.getCajero() == null || !transaccion.getCajero().getId().equals(pagador.getId())) {
                 throw new IllegalArgumentException("Solo el cajero puede marcar el pago iniciado para un retiro.");
             }
         }
@@ -183,7 +184,6 @@ public class TransaccionService {
         Transaccion updatedTransaccion = transaccionRepository.save(transaccion);
 
         // --- Notificación WebSocket a la otra parte ---
-        // Si el vendedor pagó, notificar al cajero. Si el cajero pagó, notificar al vendedor.
         String destinatarioEmail = transaccion.getTipoOperacion().equalsIgnoreCase("deposito") ?
                                    transaccion.getCajero().getEmail() : transaccion.getVendedor().getEmail();
         
@@ -197,7 +197,7 @@ public class TransaccionService {
     }
 
     @Transactional
-    public Transaccion marcarTransaccionCompletada(Long transaccionId, Long confirmadorId) {
+    public Transaccion marcarCompletada(Long transaccionId, String emailConfirmador) { // Cambiado a recibir email
         Transaccion transaccion = transaccionRepository.findById(transaccionId)
             .orElseThrow(() -> new IllegalArgumentException("Transacción no encontrada con ID: " + transaccionId));
 
@@ -206,14 +206,17 @@ public class TransaccionService {
             throw new IllegalArgumentException("La transacción no está en estado 'en_proceso_pago' para ser completada.");
         }
 
+        // Obtener el usuario confirmador
+        Usuario confirmador = usuarioRepository.findByEmail(emailConfirmador)
+            .orElseThrow(() -> new IllegalArgumentException("Usuario confirmador no encontrado con email: " + emailConfirmador));
+
         // Validar que el confirmador sea la otra parte (el que recibe el pago)
-        // Lógica: Si es depósito, el cajero confirma. Si es retiro, el vendedor confirma.
         if (transaccion.getTipoOperacion().equalsIgnoreCase("deposito")) {
-            if (transaccion.getCajero() == null || !transaccion.getCajero().getId().equals(confirmadorId)) {
+            if (transaccion.getCajero() == null || !transaccion.getCajero().getId().equals(confirmador.getId())) {
                 throw new IllegalArgumentException("Solo el cajero puede confirmar la recepción del pago para un depósito.");
             }
         } else { // Retiro
-            if (!transaccion.getVendedor().getId().equals(confirmadorId)) {
+            if (!transaccion.getVendedor().getId().equals(confirmador.getId())) {
                 throw new IllegalArgumentException("Solo el vendedor puede confirmar la recepción del pago para un retiro.");
             }
         }
@@ -249,16 +252,19 @@ public class TransaccionService {
 
     // --- Métodos para que el vendedor vea sus propias solicitudes ---
     @Transactional(readOnly = true)
-    public List<Transaccion> obtenerMisSolicitudes(Long vendedorId) {
-        return transaccionRepository.findByVendedorId(vendedorId);
+    public List<Transaccion> getTransaccionesByVendedorEmail(String emailVendedor) { // Renombrado para consistencia
+        return transaccionRepository.findByVendedor_Email(emailVendedor); // Corregido el nombre del método
+    }
+
+    // NUEVO MÉTODO: Obtener transacciones asignadas al cajero por su email
+    @Transactional(readOnly = true)
+    public List<Transaccion> getTransaccionesAsignadasACajero(String emailCajero) {
+        return transaccionRepository.findByCajero_Email(emailCajero); // Corregido el nombre del método
     }
 
     // --- Métodos para que el administrador vea todas las transacciones ---
     @Transactional(readOnly = true)
-    public List<Transaccion> obtenerTodasLasTransacciones() {
+    public List<Transaccion> getAllTransacciones() { // Renombrado para consistencia
         return transaccionRepository.findAll();
     }
-
-    // Puedes añadir más métodos para actualizar estado (pago iniciado, confirmado, etc.),
-    // gestionar disputas, etc.
 }
